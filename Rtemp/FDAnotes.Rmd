@@ -1,0 +1,465 @@
+
+# Loch Ard River Temperature: 
+
+## Functional Data Analysis approach
+
+### Session set up
+
+```{r setup}
+# load required libraries
+library(lattice)
+library(fda)
+library(reshape)
+```
+
+### Loading in data
+
+```{r loaddata}
+# get full data set
+load("B:/Loch_Ard_Felling/Package/rivertemp/data/fullwater.rda")
+# a quick fix
+stream $ year[stream $ Sensor.Model == "Squirrel"] <- stream $ year[stream $ Sensor.Model == "Squirrel"] + 1900 
+head(stream)
+```
+
+### investigate daily temperature patterns for burn 2
+
+```{r subsetdata}
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 2 & year == 2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+head(dat)
+```
+
+```{r rawcurveplot, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(temp ~ dhour | month, groups = yday, data = dat, type = "l", as.table = TRUE)
+```
+
+Lets build some daily temperature curves.  The idea is to use functional data anaysis techniques to summarise the daily data into a few statistics using functional PCA.  These daily summaries will then be used construct yearly curves for further modelling.  It may be nesisary to remove some days as outliers before proceeding to the modelling phase.
+
+The next bit of code builds daily temperature curves selecting the roughness penalty using GCV.  A different roughness penalty is chosen for each month
+
+first job though is to set up the smoothing bases and a penalty
+
+```{r bases}
+# set up a bspline basis of dimension 48 and order 6 
+hourbasis <- create.bspline.basis(c(0, 24), 48, 6)
+# and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24))
+```
+
+```{r lambdas, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/"}
+# loop over days and fit curves
+
+getgcv <- function(lambda, .yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NA)
+  smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda)) $ gcv
+}
+
+getmonthlygcv <- function(lambda, .month, .year = 2009, .site = 2) {
+  ydays <- unique(subset(dat, month == .month) $ yday)
+  sum(sapply(ydays, getgcv, lambda = lambda, .year = .year, .site = .site), na.rm = TRUE)
+}
+
+optimfn <- function(par, .month) getmonthlygcv(exp(par), .month = .month)
+
+lambdas <- data.frame(month = factor(month.abb, levels = month.abb))
+lambdas $ loglambdas <- sapply(lambdas $ month, function(.month) optimise(optimfn, interval = c(-15, 15), .month = .month) $ minimum)
+lambdas
+```
+
+The smoothing parameters look fairly constant in time so lets use just one.
+
+```{r dailyfds, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/"}
+getcoef <- function(lambda, .yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NULL)
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+ck <- sapply(0:365, getcoef, lambda = exp(-8), .year = 2009, .site = 2)
+ck <- simplify2array(ck[!sapply(ck, is.null)])
+
+tempfd <- fd(ck, hourbasis)
+```
+
+```{r fdplot, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+capt <- plot(tempfd, col = rainbow(365), lty = 1)
+```
+
+Now we have smoothed daily curves.  What do we want to do with these...  We could look at where the biggest variability is within the day?
+
+```{r covarplots, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+varmat <- eval.bifd(hour, hour, var.fd(tempfd))
+image(hour, hour, varmat, col = heat.colors(100))
+contour(hour, hour, varmat, add = TRUE)
+```
+
+So overall the most variability is between 3pm and 6pm.  But what about at different points in the year.  The following plot looks at the variance curves for each month to see if there is a change in where the variability lies.
+
+```{r stdplots, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+stdmat <- sapply(ydays, function(i) eval.fd(hour, std.fd(tempfd[i])))
+stddat <- expand.grid(hour = hour, month = month.abb)
+stddat $ std <- c(stdmat)
+xyplot(std^2 ~ hour | month, data = stddat, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+lets to a quick PCA to see what the major components of variation are
+
+```{r pca1, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+pc <- pca.fd(tempfd, nharm = 4)
+par(mfrow = c(2,2))
+plot(pc)
+```
+
+and the harmonics are
+
+```{r pca2, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc $ harmonics)
+```
+
+The first harmonic is effectively the daily mean temperature.  It would perhaps be a good idea to remove this variation simply by centering the data around the daily means, and then examining the remaining variations.
+
+```{r dailymeanfd}
+basis1 <- create.constant.basis(c(0, 24))
+
+getcoef <- function(.yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NULL)
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, basis1)))
+}
+
+ck <- sapply(0:365, getcoef, .year = 2009, .site = 2)
+ck <- simplify2array(ck[!sapply(ck, is.null)])
+
+dailymeanfd <- fd(matrix(ck, 1), basis1)
+```
+
+So now we have a functional data object of all the daily means.  We can substract this from the daily temperature curves and investigate the remaining variation
+
+```{r centeredfd, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+centeredfd <- tempfd - dailymeanfd
+plot(centeredfd, col = rainbow(365), lty = 1)
+```
+
+```{r centredplots1, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+stdmat <- eval.fd(hour, centeredfd)
+stddat <- expand.grid(hour = hour, yday = unique(dat $ yday))
+stddat $ std <- c(stdmat)
+stddat $ month <- sapply(stddat $ yday, function(x) which(sapply(ydays, function(y) x %in% y)))
+stddat $ month <- factor(month.abb[stddat $ month], levels = month.abb)
+xyplot(std ~ hour | month, groups = yday, data = stddat, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+
+```{r centredplots2, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+stdmat <- sapply(ydays, function(i) eval.fd(hour, std.fd(centeredfd[i])))
+stddat <- expand.grid(hour = hour, month = month.abb)
+stddat $ std <- c(stdmat)
+xyplot(std^2 ~ hour | month, data = stddat, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+lets redo the PCA to see what the major components of variation now are
+
+```{r centeredpca1, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+pc2 <- pca.fd(centeredfd, nharm = 4)
+par(mfrow = c(2,2))
+plot(pc2)
+```
+
+and the harmonics are
+
+```{r centeredpca2, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc2 $ harmonics)
+```
+
+
+
+
+
+### investigate daily temperature patterns for burn 10
+
+
+
+```{r subsetdata10}
+# select a few days data and add in decimal hour
+dat10 <- with(subset(stream, site == 10 & year == 2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+head(dat10)
+```
+
+```{r rawcurveplot10, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(temp ~ dhour | month, groups = yday, data = dat10, type = "l", as.table = TRUE)
+```
+
+```{r lambdas10, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/"}
+# loop over days and fit curves
+
+getgcv <- function(lambda, .yday, .year = 2009, .site = 10) {
+  sdat <- subset(dat10, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NA)
+  smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda)) $ gcv
+}
+
+getmonthlygcv <- function(lambda, .month, .year = 2009, .site = 10) {
+  ydays <- unique(subset(dat10, month == .month) $ yday)
+  sum(sapply(ydays, getgcv, lambda = lambda, .year = .year, .site = .site), na.rm = TRUE)
+}
+
+optimfn <- function(par, .month) getmonthlygcv(exp(par), .month = .month)
+
+lambdas <- data.frame(month = factor(month.abb, levels = month.abb))
+lambdas $ loglambdas <- sapply(lambdas $ month, function(.month) optimise(optimfn, interval = c(-15, 15), .month = .month) $ minimum)
+lambdas
+```
+
+The smoothing parameters look fairly constant in time so lets use just one.
+
+```{r dailyfds10, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/"}
+getcoef <- function(lambda, .yday, .year = 2009, .site = 10) {
+  sdat <- subset(dat10, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NULL)
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+ck <- sapply(0:365, getcoef, lambda = exp(-8), .year = 2009, .site = 10)
+ck <- simplify2array(ck[!sapply(ck, is.null)])
+
+tempfd10 <- fd(ck, hourbasis)
+```
+
+```{r fdplot10, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+capt <- plot(tempfd10, col = rainbow(365), lty = 1)
+```
+
+```{r dailymeanfd10}
+basis1 <- create.constant.basis(c(0, 24))
+
+getcoef <- function(.yday, .year = 2009, .site = 10) {
+  sdat <- subset(dat10, yday == .yday & year == .year & site == .site)
+  if (nrow(sdat) < 23) return (NULL)
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, basis1)))
+}
+
+ck <- sapply(0:365, getcoef)
+ck <- simplify2array(ck[!sapply(ck, is.null)])
+
+dailymeanfd10 <- fd(matrix(ck, 1), basis1)
+```
+
+So now we have a functional data object of all the daily means.  We can substract this from the daily temperature curves and investigate the remaining variation
+
+```{r centeredfd10, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+centeredfd10 <- tempfd10 - dailymeanfd10
+plot(centeredfd10, col = rainbow(365), lty = 1)
+```
+
+```{r centredplots10_1, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+stdmat <- eval.fd(hour, centeredfd10)
+stddat <- expand.grid(hour = hour, yday = unique(dat10 $ yday))
+stddat $ month <- sapply(stddat $ yday, function(x) which(sapply(ydays, function(y) x %in% y)))
+stddat $ month <- factor(month.abb[stddat $ month], levels = month.abb)
+stddat $ std <- c(stdmat)
+xyplot(std ~ hour | month, groups = yday, data = stddat, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+
+```{r centredplots10_2, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+stdmat <- sapply(ydays, function(i) eval.fd(hour, std.fd(centeredfd10[i])))
+stddat <- expand.grid(hour = hour, month = month.abb)
+stddat $ std <- c(stdmat)
+xyplot(std^2 ~ hour | month, data = stddat, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+lets redo the PCA to see what the major components of variation now are
+
+```{r centeredpca10_1, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+pc10.2 <- pca.fd(centeredfd10, nharm = 4)
+par(mfrow = c(2,2))
+plot(pc10.2)
+```
+
+and the harmonics are
+
+```{r centeredpca10_2, fig.width=7, fig.height=7, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc10.2 $ harmonics)
+```
+
+
+
+
+### what about cross correlations?
+
+lets remind ourselves of the within site covariances
+
+```{r varfd1, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 2")
+```
+
+```{r varfd1a, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd10[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 10")
+```
+
+The same scaled
+
+```{r varfd1b, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 2")
+```
+
+```{r varfd1c, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd10[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 10")
+```
+
+Now with the daily mean removed
+
+```{r varfd2, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 2")
+```
+
+```{r varfd2a, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd10[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 10")
+```
+
+The same scaled
+
+```{r varfd2b, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 2")
+```
+
+```{r varfd2c, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd10[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE, main = "Burn 10")
+```
+
+
+
+
+```{r covarfd, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+varmat <- eval.bifd(hour, hour, var.fd(tempfd, tempfd10))
+image(hour, hour, varmat, col = heat.colors(100), xlab = "time of day at burn 2", ylab = "time of day at burn 10")
+contour(hour, hour, varmat, add = TRUE)
+abline(v = seq(0, 24, by = 3), h = seq(0, 24, by = 3), lty = 2, col = "#00000033")
+abline(a = 0, b = 1, lty = 1, col = "#00000022")
+```
+
+```{r covarfd1, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd[i], tempfd10[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = month.abb)
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE)
+```
+
+with each month rescaled to see detail:
+
+```{r covarfd1a, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(tempfd[i], tempfd10[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE)
+```
+
+Now for the same after removing daily mean variation
+
+```{r covarfd2, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd[i], centeredfd10[i])))
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = month.abb)
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE)
+```
+
+The next plot is scaled covariance to see the detail by month since the summer months swamp the covariance between the sites
+
+```{r covarfd3, fig.width=14, fig.height=14, fig.path="B:/Loch_Ard_Felling/fig/"}
+hour <- seq(0, 24, length = 100)
+ydays <- lapply(month.abb, function(x) unique(subset(dat10, month == x) $ yday))
+varmat <- sapply(ydays, function(i) eval.bifd(hour, hour, var.fd(centeredfd[i], centeredfd10[i])))
+scl <- apply(abs(varmat), 2, max)
+varmat <- sweep(varmat, 2, scl, "/")
+vardat <- expand.grid(hour2 = hour, hour10 = hour, month = paste(month.abb, round(scl, 2)))
+vardat $ covar <- c(varmat)
+levelplot(covar ~ hour2 * hour10 | month, data = vardat, col.regions = heat.colors(100), contour = TRUE, as.table = TRUE)
+```
+
+
+
+So from the crosscorrelation plots (this will be clearer when we put in feint diagonal lines) that the peak of covariance is slightly off diagonal indicating that the daily curves have maximum variance at slightly different time of day.  THis is most common in the afternoon peak, than in the morning peak (associated with the morning low) which tends to be more consistent between sites accross days.
+
+### now to look at the behaviour of the components of variation through time.  I think we conduct seperate PCA for each site, then convert each time series of basis coefficients into curves.  THen we will look at the same kind of plots for interannual variability (pre felling then post felling periods).

@@ -1,0 +1,4 @@
+^data-raw$
+^notes.md$
+^.travis.yml$
+^Rtemp$

@@ -1,0 +1,356 @@
+
+# Loch Ard River Temperature: 
+
+## Functional Data Analysis approach part 3
+
+### Session set up
+
+```{r setup, cache = FALSE}
+# load required libraries
+library(lattice)
+library(fda)
+library(reshape)
+library(mgcv)
+#opts_chunk $ set(echo=FALSE, fig.path='myproject/plot-', cache=TRUE)
+opts_chunk $ set(fig.width = 10, fig.height = 10, 
+                 fig.path   = "B:/Loch_Ard_Felling/fig/",
+                 cache = TRUE,
+                 cache.path = "B:/Loch_Ard_Felling/cache/page3/")
+```
+
+### Loading in data
+
+```{r loaddata, cache = FALSE}
+# get full data set
+load("B:/Loch_Ard_Felling/Package/rivertemp/data/fullwater.rda")
+# a quick fix
+stream $ year[stream $ Sensor.Model == "Squirrel"] <- stream $ year[stream $ Sensor.Model == "Squirrel"] + 1900 
+```
+
+### set up smooth bases for daily curves
+
+```{r bases}
+# set up a bspline basis of dimension 48 and order 6 
+hourbasis <- create.bspline.basis(c(0, 24), 48, 6)
+# and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24))
+```
+
+### run PCA for burn 2 and extract covariates
+
+
+```{r subsetdata2}
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 2 & year %in% 2003:2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+dat <- subset(dat, yday < 365) # remove last day of leap year
+
+getcoef <- function(lambda, .yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  #if (nrow(sdat) < 23) return (NULL)
+  if (sum(unique(round(sdat $ dhour)) %in% 0:24) < 24) return(NULL)  
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+yday <- rep(0:365, length(2003:2009))
+year <- rep(2003:2009, each = 366)
+
+ck <- mapply(getcoef, .yday = yday, .year = year, MoreArgs = list(lambda = exp(-8)))
+whichNULL <- sapply(ck, is.null)
+ck <- simplify2array(ck[!whichNULL])
+
+info2 <-data.frame(yday = yday[!whichNULL], year = year[!whichNULL])
+
+tempfd2 <- fd(ck, hourbasis)
+pc2 <- pca.fd(tempfd2, nharm = 4) # is this sensitive to missing values?...
+
+info2[pc2 $ harmonics $ fdnames[[2]]] <- as.data.frame(pc2 $ scores)
+head(info2)
+```
+
+### now for burn 10
+
+```{r subsetdata10}
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 10 & year %in% 2003:2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+dat <- subset(dat, yday < 365) # remove last day of leap year
+
+getcoef <- function(lambda, .yday, .year = 2009, .site = 10) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  #if (nrow(sdat) < 23) return (NULL)
+  if (sum(unique(round(sdat $ dhour)) %in% 0:24) < 24) return(NULL)  
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+yday <- rep(0:365, length(2003:2009))
+year <- rep(2003:2009, each = 366)
+
+ck <- mapply(getcoef, .yday = yday, .year = year, MoreArgs = list(lambda = exp(-8)))
+whichNULL <- sapply(ck, is.null)
+ck <- simplify2array(ck[!whichNULL])
+
+info10 <-data.frame(yday = yday[!whichNULL], year = year[!whichNULL])
+
+tempfd10 <- fd(ck, hourbasis)
+pc10 <- pca.fd(tempfd10, nharm = 4) # is this sensitive to missing values?...
+
+info10[pc10 $ harmonics $ fdnames[[2]]] <- as.data.frame(pc10 $ scores)
+head(info10)
+```
+All we want to use now is `info2` and `info 10`.
+
+
+```{r merge}
+info <- merge(info2, info10, by = c("yday", "year"), suffixes = c(".2", ".10"))
+info $ day <- with(info, yday + (year - 2003) * 365)
+info $ month <- month.abb[strptime(paste(info $ yday + 1, info $ year), format = "%j %Y") $ mon + 1]
+info $ season <- with(info, ifelse(month %in% c("Nov", "Dec", "Jan", "Feb"), "Winter", 
+                              ifelse(month %in% c("Mar", "Apr"), "Spring",
+                                ifelse(month %in% c("May", "Jun", "Jul", "Aug"), "Summer", "Autumn"))))
+info $ season <- factor(info $ season, levels = c("Winter", "Spring", "Summer", "Autumn"))
+head(info)
+```
+
+now to look at some regressions between stuff
+
+```{r splomsall}
+plot.pcs <- function(infodat, main = NULL) {
+  par(mfrow = c(4, 4), mar = c(0,0,0,0), oma = c(2, 2, 5, 4))
+  for (i in 1:4) {
+    for (j in 1:4) {
+      plot(infodat[[paste0("PC",i, ".2")]], infodat[[paste0("PC",j, ".10")]], ann = FALSE, axes = FALSE)
+      box()
+    }
+  }
+  mtext(paste("PC", 1:4), side = 3, line = .5, at = 1:4 / 4 - .125, outer = TRUE)
+  mtext(paste("PC", 1:4), side = 4, line = .5, at = 4:1 / 4 - .125, outer = TRUE, las = 1)
+  mtext("Burn 2", side = 1, line = .5, at = .5, outer = TRUE)
+  mtext("Burn 10", side = 2, line = .5, at = .5, outer = TRUE)
+  if (!is.null(main)) mtext(main, side = 3, line = 3, at = 0.5, outer = TRUE, font = 2, cex = 1.5)
+}
+plot.pcs(info, main = "All data")
+```
+
+```{r splomsbyquarter1}
+plot.pcs(subset(info, yday > 0 & yday <= 90))
+```
+
+```{r splomsbyquarter2}
+plot.pcs(subset(info, yday > 90 & yday <= 180))
+```
+
+```{r splomsbyquarter3}
+plot.pcs(subset(info, yday > 180 & yday <= 270))
+```
+
+```{r splomsbyquarter4}
+plot.pcs(subset(info, yday > 270 & yday <= 366))
+```
+
+### Have a look to see if anything correlates with the NAO index
+```{r naodata}
+# extracted on 16:41 19/05/2014 from:
+# https://climatedataguide.ucar.edu/sites/default/files/climate_index_files/nao_station_monthly.txt
+nao <- read.table("B:/Loch_Ard_Felling/data/nao_station_monthly.txt", skip = 1, header = TRUE)
+plot(c(t(nao[paste(2003:2009),])), type = "l")
+```
+
+### Have a look to see if anything correlates with the AMO index
+```{r amodata}
+# extracted on 16:41 19/05/2014 from:
+# http://www.esrl.noaa.gov/psd/data/correlation/amon.us.data
+amo <- read.table("B:/Loch_Ard_Felling/data/amon.us.data.txt", skip = 1, nrows = 66, row.names = 1, col.names = c("year", month.abb))
+plot(c(t(amo[paste(2003:2009),])), type = "l")
+```
+These come in monthly values... so we might use a smoothed version of them...
+
+```{r oscilations}
+naolong <- data.frame(year = rep(rownames(nao), each = ncol(nao)), month = rep(colnames(nao), nrow(nao)), nao = c(t(nao)))
+amolong <- data.frame(year = rep(rownames(amo), each = ncol(amo)), month = rep(colnames(amo), nrow(amo)), amo = c(t(amo)))
+
+info <- merge(info, amolong, all.x = TRUE)
+info <- merge(info, naolong, all.x = TRUE)
+info <- info[order(info $ day), ]
+#splom( ~ info[c("PC1.10", "PC1.2", "PC2.2", "PC3.2", "PC4.2", "nao", "amo")] | year)
+xyplot(PC1.10 ~ amo | season , groups = year, data = info)
+```
+
+
+
+### Now try some regressions
+
+```{r gamms_try1}
+g1 <- gamm(PC1.10 ~ s(yday, bs = "cc", k = 9) + s(day, k = 9) +
+                    s(yday, k = 9, by = PC1.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC2.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC3.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC4.2, bs = "cc"), 
+           data = info, 
+           correlation = corAR1(form = ~ yday | factor(year)))
+plot(g1 $ gam, scale = 0, pages = 1)
+```
+
+```{r gamms1_plot1}
+plot(g1 $ gam, select = 2, scale = 0)
+abline(v = 1:7 * 365, col = "darkblue")
+```
+
+So... Lets try fitting this model to each of the components and then we can see how good the predictions of daily temperature are!
+
+```{r gamms_try2}
+g2 <- gamm(PC2.10 ~ s(yday, bs = "cc", k = 9) + s(day, k = 9) +
+                    s(yday, k = 9, by = PC1.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC2.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC3.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC4.2, bs = "cc"), 
+           data = info, 
+           correlation = corAR1(form = ~ yday | factor(year)))
+
+g3 <- gamm(PC3.10 ~ s(yday, bs = "cc", k = 9) + s(day, k = 9) +
+                    s(yday, k = 9, by = PC1.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC2.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC3.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC4.2, bs = "cc"), 
+           data = info, 
+           correlation = corAR1(form = ~ yday | factor(year)))
+
+g4 <- gamm(PC4.10 ~ s(yday, bs = "cc", k = 9) + s(day, k = 9) +
+                    s(yday, k = 9, by = PC1.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC2.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC3.2, bs = "cc") + 
+                    s(yday, k = 9, by = PC4.2, bs = "cc"), 
+           data = info, 
+           correlation = corAR1(form = ~ yday | factor(year)))
+```
+
+```{r gamplots2}
+plot(g2 $ gam, scale = 0, pages = 1)
+```
+
+```{r gamplots3}
+plot(g3 $ gam, scale = 0, pages = 1)
+```
+
+```{r gamplots4}
+plot(g4 $ gam, scale = 0, pages = 1)
+```
+
+OKAY so we have our component models, now lets try to predict daily temperatures for burn 10!
+
+```{r predict}
+preddat <- expand.grid(yday = 0:365, year = 2003:2005)
+preddat $ day <- preddat $ yday + (preddat $ year - 2003) * 365
+# choose some values for PC1 etc...
+# okay so this time we really just want the fitted values
+fits <- info[c("yday", "day", "month", "season", "year", "nao", "amo")]
+fits $ PC1 <- fitted(g1 $ gam)
+fits $ PC2 <- fitted(g2 $ gam)
+fits $ PC3 <- fitted(g3 $ gam)
+fits $ PC4 <- fitted(g4 $ gam)
+```
+
+So now we convert these into daily curves through the functional object for burn 10
+
+```{r preddaily}
+hours <- 0:24
+preds <- eval.fd(hours, pc10 $ harmonics) %*% t(as.matrix(fits[paste0("PC", 1:4)]))
+preds <- preds + c(eval.fd(hours,  pc10 $ meanfd))
+raws <- eval.fd(hours, pc10 $ harmonics) %*% t(as.matrix(info[order(info $ day),paste0("PC", 1:4, ".10")]))
+raws <- raws + c(eval.fd(hours,  pc10 $ meanfd))
+fits2 <- fits[rep(1:nrow(fits), each = length(hours)),]
+fits2 $ hour <- rep(hours, nrow(fits))
+fits2 $ fit <- c(preds)
+fits2 $ raw <- c(raws)
+fits2 $ resid <- with(fits2, raw - fit)
+xyplot(fit ~ hour | factor(month, month.abb) + factor(year), groups = day, data = fits2, type = "l", as.table = TRUE)
+```
+
+But what to the residuals look like.... bearing in mind the analysis has removed AR1 noise from each component.
+
+```{r residuals}
+xyplot(resid ~ hour | factor(month, month.abb) + factor(year), groups = day, data = fits2, type = "l", as.table = TRUE)
+```
+
+Fine for now.  So if the smooth term for day is indeed the felling effect, can we isolate that! Conditional on the observed temperature curves in burn 2??
+
+```{r felling_effect}
+# predict with felling in there... done
+# now predict with no felling effect and look at the difference
+X1 <- predict(g1 $ gam, type = "lpmatrix")
+c1 <- coef(g1 $ gam)
+X2 <- predict(g2 $ gam, type = "lpmatrix")
+c2 <- coef(g2 $ gam)
+X3 <- predict(g3 $ gam, type = "lpmatrix")
+c3 <- coef(g3 $ gam)
+X4 <- predict(g4 $ gam, type = "lpmatrix")
+c4 <- coef(g4 $ gam)
+
+cnames <- colnames(X1)
+feffect <- grepl("s[(]day[)]", cnames)
+
+X1val <- X1[1,feffect]
+X2val <- X2[1,feffect]
+X3val <- X3[1,feffect]
+X4val <- X4[1,feffect]
+
+X1f <- X1; X1f[,feffect] <- rep(X1val, each = nrow(X1))
+X2f <- X2; X2f[,feffect] <- rep(X2val, each = nrow(X2))
+X3f <- X3; X3f[,feffect] <- rep(X3val, each = nrow(X3))
+X4f <- X4; X4f[,feffect] <- rep(X4val, each = nrow(X4))
+
+fullPC <- cbind(X1 %*% c1, X2 %*% c2, X3 %*% c3, X4 %*% c4)
+nofellPC <- cbind(X1f %*% c1, X2f %*% c2, X3f %*% c3, X4f %*% c4)
+
+nofell <- eval.fd(hours, pc10 $ harmonics) %*% t(nofellPC) + c(eval.fd(hours,  pc10 $ meanfd))
+fell <- eval.fd(hours, pc10 $ harmonics) %*% t(fullPC) + c(eval.fd(hours,  pc10 $ meanfd))
+fits2 $ nofell <- c(nofell)
+fits2 $ wfell <- c(fell)
+fits2 $ feffect <- c(fell) - c(nofell)
+xyplot(feffect ~ hour | factor(month, month.abb) + factor(year), groups = day, data = fits2, type = "l", as.table = TRUE, grid = TRUE)
+```
+
+
+```{r fellingplot2}
+fits2 $ yhour <- fits2 $ hour + fits2 $ day * 24
+with(fits2, {
+  plot(yhour, feffect, pch = ".", col = rainbow(25)[hour + 1], ylab = "Felling effect", xlab = "Date", axes = FALSE)
+  aty <- seq(-1, 1, by = 0.2)
+  axis(2, at = aty)
+  atx <- seq(0, 10, by = 0.5)
+  axis(1, at = atx * 24 * 365, labels = 2003 + atx)
+  box(bty = "l")
+})
+points(subset(fits2, hour == 12) $ yhour, colMeans(fell - nofell), pch = ".", col = 1, cex = 3)
+points(subset(fits2, hour == 12) $ yhour, apply(fell - nofell, 2, max), pch = ".", col = 1, cex = 3)
+points(subset(fits2, hour == 12) $ yhour, apply(fell - nofell, 2, min), pch = ".", col = 1, cex = 3)
+abline(v = 365 * 24 * 0:7, h = 0, col = "darkblue")
+```
+
+```{r fellingplot3}
+x <- 1:(max(fits2 $ day) + 1)
+y <- 1:25
+z <- matrix(NA, length(y), length(x))
+z[,unique(fits2 $ day)+1] <- fell - nofell
+head(z)
+image(z)
+contour(z, add = TRUE)
+```
+
+To reload the data in the previous R chunks for analysis use
+
+```
+lazyLoad("B:/Loch_Ard_Felling/cache/page3/predict_2b403e383e33ffaaee92341d77492759")
+```
+
+

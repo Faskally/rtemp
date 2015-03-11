@@ -1,0 +1,228 @@
+
+# Loch Ard River Temperature: 
+
+## Functional Data Analysis approach part 2
+
+### Session set up
+
+```{r setup}
+# load required libraries
+library(lattice)
+library(fda)
+library(reshape)
+```
+
+### Loading in data
+
+```{r loaddata}
+# get full data set
+load("B:/Loch_Ard_Felling/Package/rivertemp/data/fullwater.rda")
+# a quick fix
+stream $ year[stream $ Sensor.Model == "Squirrel"] <- stream $ year[stream $ Sensor.Model == "Squirrel"] + 1900 
+```
+
+### run PCA for burn 2 and extract covariates
+
+
+```{r bases}
+# set up a bspline basis of dimension 48 and order 6 
+hourbasis <- create.bspline.basis(c(0, 24), 48, 6)
+# and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24))
+```
+
+```{r subsetdata2, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/page2/"}
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 2 & year %in% 2005:2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+
+getcoef <- function(lambda, .yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  #if (nrow(sdat) < 23) return (NULL)
+  if (sum(unique(round(sdat $ dhour)) %in% 0:24) < 24) return(NULL)  
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+yday <- rep(0:365, length(2005:2009))
+year <- rep(2005:2009, each = 366)
+
+ck <- mapply(getcoef, .yday = yday, .year = year, MoreArgs = list(lambda = exp(-8)))
+whichNULL <- sapply(ck, is.null)
+ck <- simplify2array(ck[!whichNULL])
+
+info2 <-data.frame(yday = yday[!whichNULL], year = year[!whichNULL])
+
+tempfd2 <- fd(ck, hourbasis)
+pc2 <- pca.fd(tempfd2, nharm = 4) # is this sensitive to missing values?...
+
+info2[pc2 $ harmonics $ fdnames[[2]]] <- as.data.frame(pc2 $ scores)
+head(info2)
+```
+So we have the PCA scores / new-basis coeficients
+
+```{r rawcurveplot, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(PC1 + PC2 + PC3 + PC4 ~ yday, groups = year, data = info2, type = "l", as.table = TRUE, scales = "free")
+```
+
+```{r pcacurveplot, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+par(mfrow = c(2,2))
+plot(pc2)
+```
+
+```{r pcacurveplot2, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc2 $ harmonics)
+```
+
+and now create functional data objects with these values.
+
+```{r yearbases}
+# set up a bspline basis of dimension 48 and order 6 
+yearbasis <- create.bspline.basis(c(0, 365), 300, 6)
+# and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+yearpenalty <- vec2Lfd(c(0, (2*pi/365)^2, 0), c(0, 365))
+```
+
+```{r yearfd, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+#getgcv <- function(lambda, .year = 2009) {
+#  sdat <- subset(info2, year == .year)
+#  smooth.basis(sdat $ yday, sdat $ PC1, fdPar(yearbasis, yearpenalty, lambda)) $ gcv
+#}
+
+#loglambda <- optimise(function(ll) sum(sapply(2005:2009, getgcv, lambda = exp(ll))), c(-10, 10)) $ minimum
+
+getcoef <- function(lambda, .year = 2009) {
+  sdat <- subset(info2, year == .year)
+  c(coef(smooth.basis(sdat $ yday, sdat $ PC1, fdPar(yearbasis, yearpenalty, lambda))))
+}
+
+ck <- sapply(2005:2009, getcoef, lambda = exp(15))
+b2fd <- fd(ck, yearbasis)
+plot(b2fd)
+```
+
+```{r rawcurveplotpc1, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(PC1 ~ yday | factor(year), groups = year, data = info2, type = "p", as.table = TRUE, col = 1:5, lty = 1:5)
+```
+
+covar plots over year for burn 2
+
+```{r varplots2, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+year <- seq(0, 365, length = 500)
+varmat <- eval.bifd(year, year, var.fd(b2fd))
+image(year, year, varmat, col = heat.colors(100))
+contour(year, year, varmat, add = TRUE)
+```
+
+
+## now burn 10
+
+```{r subsetdata10, cache=TRUE, cache.path="B:/Loch_Ard_Felling/cache/page2/"}
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 10 & year %in% 2005:2009), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+
+getcoef <- function(lambda, .yday, .year = 2009, .site = 10) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  #if (nrow(sdat) < 23) return (NULL)
+  if (sum(unique(round(sdat $ dhour)) %in% 0:24) < 24) return(NULL)  
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+yday <- rep(0:365, length(2005:2009))
+year <- rep(2005:2009, each = 366)
+
+ck <- mapply(getcoef, .yday = yday, .year = year, MoreArgs = list(lambda = exp(-8)))
+whichNULL <- sapply(ck, is.null)
+ck <- simplify2array(ck[!whichNULL])
+
+info10 <-data.frame(yday = yday[!whichNULL], year = year[!whichNULL])
+
+tempfd10 <- fd(ck, hourbasis)
+pc10 <- pca.fd(tempfd10, nharm = 4) # is this sensitive to missing values?...
+
+info10[pc10 $ harmonics $ fdnames[[2]]] <- as.data.frame(pc10 $ scores)
+head(info10)
+```
+So we have the PCA scores / new-basis coeficients
+
+```{r rawcurveplot10, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(PC1 + PC2 + PC3 + PC4 ~ yday, groups = year, data = info10, type = "l", as.table = TRUE, scales = "free")
+```
+
+```{r pcacurveplot10, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+par(mfrow = c(2,2))
+plot(pc10)
+```
+
+```{r pcacurveplot102, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc10 $ harmonics)
+```
+
+and now create functional data objects with these values.
+
+
+```{r yearfd10, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+#getgcv <- function(lambda, .year = 2009) {
+#  sdat <- subset(info2, year == .year)
+#  smooth.basis(sdat $ yday, sdat $ PC1, fdPar(yearbasis, yearpenalty, lambda)) $ gcv
+#}
+
+#loglambda <- optimise(function(ll) sum(sapply(2005:2009, getgcv, lambda = exp(ll))), c(-10, 10)) $ minimum
+
+getcoef <- function(lambda, .year = 2009) {
+  sdat <- subset(info10, year == .year)
+  c(coef(smooth.basis(sdat $ yday, sdat $ PC1, fdPar(yearbasis, yearpenalty, lambda))))
+}
+
+ck <- sapply(2005:2009, getcoef, lambda = exp(15))
+b10fd <- fd(ck, yearbasis)
+plot(b10fd)
+```
+
+```{r rawcurveplotpc10_1, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+xyplot(PC1 ~ yday | factor(year), groups = year, data = info10, type = "p", as.table = TRUE, col = 1:5, lty = 1:5)
+```
+
+covar plots over year for burn 10
+
+```{r varplots10, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+year <- seq(0, 365, length = 500)
+varmat <- eval.bifd(year, year, var.fd(b10fd))
+image(year, year, varmat, col = heat.colors(100))
+contour(year, year, varmat, add = TRUE)
+```
+
+
+
+covar plots over year for burn 2 and burn 10
+
+```{r covarplots210, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+year <- seq(0, 365, length = 500)
+varmat <- eval.bifd(year, year, var.fd(b2fd, b10fd))
+image(year, year, varmat, col = heat.colors(100))
+contour(year, year, varmat, add = TRUE)
+```
+
+
+```{r comparePCA, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(pc2 $ harmonics, lty = 1)
+plot(pc10 $ harmonics, add = TRUE, lty = 2)
+```
+
+```{r comparemean, fig.width=10, fig.height=10, fig.path="B:/Loch_Ard_Felling/fig/"}
+plot(mean(tempfd2), lty = 1, ylim = c(7, 10))
+plot(mean(tempfd10), add = TRUE, lty = 2)
+```
+
+
+### now to look at the behaviour of the components of variation through time.  I think we conduct seperate PCA for each site, then convert each time series of basis coefficients into curves.  THen we will look at the same kind of plots for interannual variability (pre felling then post felling periods).

@@ -1,0 +1,156 @@
+
+```{r setup, cache = FALSE, echo = FALSE}
+# load required libraries
+library(fda)
+library(lattice)
+
+dir <- "B:/LochArd_Fellng/"
+
+opts_chunk $ set(fig.width = 10, fig.height = 10, 
+                 fig.path   = paste0(dir, "Rmd/simulation/fig/"),
+                 cache = FALSE,
+                 cache.path = paste0(dir, "Rmd/simulation/cache/"),
+                 echo = FALSE)
+options(digits = 5)
+```
+
+# Simulating river temperature
+
+We are going to simulate some (probably wierd looking) temperature time series.  The purpose is to investigate what the model can do.  Lets keep things simple first off and use 4 degrees of freedom for the hourly smoothers and 10 degrees of freedom for the yearly smoothers.
+
+```{r outline, echo = TRUE}
+# number of parameters in hourly model
+ph <- 6
+# number of parameters in daily model
+pd <- 10
+
+# sample points
+hours <- seq(0, 24, by = 0.25)
+days <- 1:365
+
+# lets use a bspline basis for both
+hourbasis <- create.bspline.basis(c(0, 24), ph, 6)
+hourX <- Matrix(getbasismatrix(hours, hourbasis), sparse = TRUE)
+
+daybasis <- create.bspline.basis(c(1, 365), pd, 6)
+dayX <- Matrix(getbasismatrix(days, daybasis), sparse = TRUE)
+
+# the full X matrix is
+X <- Diagonal(365) %x% hourX
+
+# the full Z matrix is
+Z <- Diagonal(ph) %x% dayX
+
+# The permutation matrix is
+P <- Matrix(0, 365*ph, 365*ph)
+P[1:365,] <- Diagonal(365) %x% Matrix(c(1, rep(0, ph-1)), 1)
+for (i in 1:(ph-1)) P[i * 365 + 1:365,] <- Diagonal(365) %x% Matrix(c(rep(0, i), 1, rep(0, ph-1-i)), 1)
+
+# so the full model (without AR1 noise on the coeffients is)
+A <- X %*% P %*% Z
+
+# lets choose some random coefficients and plot what we get
+alpha <- rnorm(ph*pd, 0, 1)
+
+df <- expand.grid(hour = hours, day = days)
+df $ month <- factor(month.abb[floor(df $ day / 30.5) + 1], month.abb)
+df $ model <- A %*% alpha
+
+xyplot(model ~ hour | month, group = day, data = df, type = "l")
+```
+
+okay so it looks daft, so lets parameterise it a bit better after conducting a PCA on daily temperatures
+
+```{r pca, cache = TRUE}
+# get full data set
+load("B:/Loch_Ard_Felling/Package/rivertemp/data/fullwater.rda")
+# a quick fix
+stream $ year[stream $ Sensor.Model == "Squirrel"] <- stream $ year[stream $ Sensor.Model == "Squirrel"] + 1900 
+# set up a bspline basis of dimension 48 and order 6 
+hourbasis <- create.bspline.basis(c(0, 24), 48, 6)
+# and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24))
+
+# select a few days data and add in decimal hour
+dat <- with(subset(stream, site == 2 & year %in% 2003:2003), 
+    data.frame(temp = Original.Value, 
+               dhour = hour + min/60, 
+               month = factor(month.abb[mon + 1], levels = month.abb), 
+               yday = yday, 
+               year = year, 
+               site = site))
+dat <- subset(dat, yday < 365) # remove last day of leap year
+
+getcoef <- function(lambda, .yday, .year = 2009, .site = 2) {
+  sdat <- subset(dat, yday == .yday & year == .year & site == .site)
+  #if (nrow(sdat) < 23) return (NULL)
+  if (sum(unique(round(sdat $ dhour)) %in% 0:24) < 24) return(NULL)  
+  c(coef(smooth.basis(sdat $ dhour, sdat $ temp, fdPar(hourbasis, penalty, lambda))))
+}
+
+yday <- rep(0:365, length(2003:2009))
+year <- rep(2003:2009, each = 366)
+
+ck <- mapply(getcoef, .yday = yday, .year = year, MoreArgs = list(lambda = exp(-8)))
+whichNULL <- sapply(ck, is.null)
+ck <- simplify2array(ck[!whichNULL])
+
+tempfd2 <- fd(ck, hourbasis)
+pc2 <- pca.fd(tempfd2, nharm = 4) # is this sensitive to missing values?...
+par(mfrow = c(2,2))
+plot(pc2)
+```
+
+```{r newbasis_fd}
+newbasis <- pc2 $ harmonics
+plot(newbasis)
+```
+
+try and simulate some days based on these new bases
+
+```{r outline2, echo = TRUE}
+# number of parameters in hourly model
+ph <- 4 # by design
+# number of parameters in daily model
+pd <- 10
+
+# sample points
+hours <- seq(0, 24, by = 0.25)
+days <- 1:365
+
+# lets use a bspline basis for both
+hourX <- Matrix(eval.fd(hours, newbasis), sparse = TRUE)
+
+daybasis <- create.bspline.basis(c(1, 365), pd, 6)
+dayX <- Matrix(getbasismatrix(days, daybasis), sparse = TRUE)
+
+# the full X matrix is
+X <- Diagonal(365) %x% hourX
+
+# the full Z matrix is
+Z <- Diagonal(ph) %x% dayX
+
+# The permutation matrix is
+P <- Matrix(0, 365*ph, 365*ph)
+P[1:365,] <- Diagonal(365) %x% Matrix(c(1, rep(0, ph-1)), 1)
+for (i in 1:(ph-1)) P[i * 365 + 1:365,] <- Diagonal(365) %x% Matrix(c(rep(0, i), 1, rep(0, ph-1-i)), 1)
+
+# so the full model (without AR1 noise on the coeffients is)
+A <- X %*% P %*% Z
+
+# lets choose some random coefficients and plot what we get
+alpha <- rnorm(ph*pd, 0, 1)
+
+df <- expand.grid(hour = hours, day = days)
+df $ month <- factor(month.abb[floor(df $ day / 30.5) + 1], month.abb)
+df $ model <- A %*% alpha
+
+xyplot(model ~ hour | month, group = day, data = df, type = "l")
+``
+
+now down to 40 parameters though!  But we could do better by doing a PCA on each basis coefficients time series.  Lets try and improve the 1st PC.
+
+```{r }
+
+```
+

@@ -1,0 +1,14 @@
+Package: rivertemp
+Title: functions to compare river data
+Version: 0.0.1
+Authors@R: "Colin Millar <C.Millar@marlab.ac.uk> [aut, cre]"
+Description: TODO. 
+License: GPL (>= 2)
+Depends: 
+    R (>= 3.1.2)
+Imports:
+    fda (>= 2.4.4),
+    lattice (>= 0.20-29)
+License: file LICENSE
+LazyData: true
+
