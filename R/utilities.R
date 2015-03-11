@@ -221,8 +221,8 @@ lattice::xyplot(value ~ wk | factor(year) + variable, data = preddat,
                      scales = list(relation = "free"), 
                      ylab = "monthly variation", xlab = "", main = PC,
                      axis = function(side, ...) {
-                       if (current.column() == 1 & side == "left") {
-                        panel.axis(side, outside = TRUE, tck = .3, text.cex = .7)
+                       if (lattice::current.column() == 1 & side == "left") {
+                        lattice::panel.axis(side, outside = TRUE, tck = .3, text.cex = .7)
                        }
                      },
                      par.settings = list(layout.heights = list(axis.panel = 0), 
