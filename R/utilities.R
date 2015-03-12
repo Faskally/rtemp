@@ -2,8 +2,6 @@
 #' @import fda
 NULL
 
-#' @import reshape
-NULL
 
 #' Run a full calibration
 #' 
@@ -210,7 +208,7 @@ preddat <- expand.grid(wk = levels(dat1 $ wk[drop = TRUE]),
 preddat $ intercept <- predict(m1, newdata = cbind(preddat, control = 0))
 preddat $ slope <- predict(m1, newdata = cbind(preddat, control = 1)) - preddat $ intercept
 
-preddat <- melt(preddat, id.vars = c("wk", "year"))
+preddat <- reshape::melt(preddat, id.vars = c("wk", "year"))
 
 
 ylim <- switch(PC, PC1 = list(c(-15, 25), c(0, 1.5)),
@@ -233,3 +231,152 @@ lattice::xyplot(value ~ wk | factor(year) + variable, data = preddat,
                                                                ylab.axis.padding = 4),
                                          axis.components = list(left = list(pad1 = .2, pad2 = 2-0.2))))
 }
+
+
+
+
+
+#' Run a full calibration
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param infodat The number of simulations to use to evaluate confidence intervals.
+#' @param main A number.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+plot_pcs <- function(infodat, main = NULL) {
+  par(mfrow = c(4, 4), mar = c(0,0,0,0), oma = c(2, 2, 5, 4))
+  for (i in 1:4) {
+    for (j in 1:4) {
+      plot(infodat[[paste0("PC",i, ".x")]], infodat[[paste0("PC",j, ".y")]], ann = FALSE, axes = FALSE)
+      box()
+    } 
+  }
+  mtext(paste("PC", 1:4), side = 3, line = .5, at = 1:4 / 4 - .125, outer = TRUE)
+  mtext(paste("PC", 1:4), side = 4, line = .5, at = 4:1 / 4 - .125, outer = TRUE, las = 1)
+  mtext("Control", side = 1, line = .5, at = .5, outer = TRUE)
+  mtext("Treatment", side = 2, line = .5, at = .5, outer = TRUE)
+  if (!is.null(main)) mtext(main, side = 3, line = 3, at = 0.5, outer = TRUE, font = 2, cex = 1.5)
+}
+
+
+
+ 
+#' felling effect
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param day The number of simulations to use to evaluate confidence intervals.
+#' @param decay A number.
+#' @param b1 A number.
+#' @param a1 A number.
+#' @param type A number.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+feffect <- function(day, decay = 1, b1 = 100, a1 = 0.25, type = 2) {
+  if (type == 1) {
+    ifelse(day < 365, 0, 
+           exp(ifelse(day < 365 * 2, 0,
+                      -decay/365 * (day - 2 * 365))))
+  } else if (type == 2) {
+    a1 <- a1 * 365
+    a2 <- decay * 365
+    ifelse(day < (1.25*365),  
+           exp(-(abs(day - 1.25*365)/a1)^b1),
+           ifelse( day >= (1.25*365) & day < (1.75*365),
+                   1, exp(-(abs(day - 1.75*365)/a2)^2)))
+  }
+} 
+
+
+
+#' felling effect
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param decay The number of simulations to use to evaluate confidence intervals.
+#' @param gcv A number.
+#' @param data A number.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+fitDecay <- function(decay, gcv = FALSE, data) {
+  tmp <- data
+  tmp $ fell <- feffect(tmp $ day, decay = decay, type = 1)
+  
+  form <- y ~ (PC1.x + PC2.x + PC3.x + PC4.x) * fell +
+    s(yday, bs = "cc", k = 6) + 
+    #s(yday, by = PC1.x, bs = "cc", k = 4) + 
+    #s(yday, by = PC2.x, bs = "cc", k = 4) + 
+    #s(yday, by = PC3.x, bs = "cc", k = 4) + 
+    #s(yday, by = PC4.x, bs = "cc", k = 4) +
+    s(yday, bs = "cc", k = 6, by = fell) +
+    s(yday, by = PC1.x * fell, bs = "cc", k = 4) + 
+    s(yday, by = PC2.x * fell, bs = "cc", k = 4) + 
+    s(yday, by = PC3.x * fell, bs = "cc", k = 4) + 
+    s(yday, by = PC4.x * fell, bs = "cc", k = 4)# +
+  #s(day, k = 10)
+  
+  # generate AR1 structure
+  V <- nlme::corMatrix(nlme::Initialize(nlme::corAR1(.9), data.frame(x = tmp $ day)))
+  Cv <- chol(V)  # t(Cv)%*%Cv=V
+  w <- solve(t(Cv)) # V^{-1} = w'w
+
+  full <- mgcv::gam(form, data = tmp)
+  
+  # Use `gam' to set up model for fitting...
+  G <- mgcv::gam(form, data = tmp, fit = FALSE)
+  # fit using magic, with weight *matrix*
+  mgfit <- mgcv::magic(G $ y, G $ X, G $ sp, G $ S, G $ off, rank = G $ rank, C = G $ C, w = w)
+  # Modify previous gam object using new fit, for plotting...    
+  mg.stuff <- mgcv::magic.post.proc(G $ X, mgfit, w)
+  full $ edf[] <- mg.stuff $ edf
+  full $ Vp[] <- mg.stuff $ Vb
+  full $ coefficients[] <- mgfit $ b 
+  
+  if (gcv) full $ gcv.ubre else full
+}
+
+
+
+#' felling effect
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param model The number of simulations to use to evaluate confidence intervals.
+#' @param sim A number.
+#' @param n A number.
+#' @param which A number.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+getFelledPC <- function(model, sim = FALSE, n = 1, 
+                        which = grepl("fell", names(coef(model)))) {
+  if (!sim) {
+    b <- coef(model)
+    if (is.null(which)) which <- rep(TRUE, length(b))
+    if (!is.logical(which)) which <- 1:length(b) %in% which
+    b[!which] <- 0
+    c(predict(model, type = "lpmatrix") %*% b)
+  } else {
+    b <- coef(model)
+    V <- model $ Vp
+    bsim <- MASS::mvrnorm(n, b, V)
+    if (is.null(which)) which <- rep(FALSE, length(b))    
+    if (!is.logical(which)) which <- 1:length(b) %in% which
+    bsim[,!which] <- 0
+    predict(model, type = "lpmatrix") %*% t(bsim)
+  }
+} 
+
+
