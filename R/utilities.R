@@ -18,7 +18,7 @@ NULL
 cleanData <- function(object) {
 
   # remove last day of leap year
-  object <- subset(object, yday < 365) 
+  object <- object[object $ yday < 365,] 
 
   # remove any days where there is not an obervation once an hour
   fullday <- 
@@ -264,7 +264,7 @@ getgcv <- function(object, nbsplines = 24, lambda = 0, breaks = NULL) {
 #' @export
 #' @examples
 #' 1 + 1
-reduceData <- function(object, pc) {
+reduceData_old <- function(object, pc) {
 
   # now convert newdata to basis coefficients using the new bases.
   object $ dhour <- with(object, hour + min/60)

@@ -4,15 +4,9 @@
 \alias{reduceData}
 \title{Run a full calibration}
 \usage{
-reduceData(object, pc)
-
-reduceData(object, pc)
+reduceData(dat, basisdim = 47, redbasisdim = 12, nharm = 4)
 }
 \arguments{
-\item{object}{The number of simulations to use to evaluate confidence intervals.}
-
-\item{pc}{A number.}
-
 \item{dat}{The number of simulations to use to evaluate confidence intervals.}
 
 \item{basisdim}{The number of simulations to use to evaluate confidence intervals.}
@@ -24,12 +18,8 @@ reduceData(object, pc)
 \description{
 This function does everything from read in files, select calibtation period and
 thens runs a calibration and saves the file.
-
-This function does everything from read in files, select calibtation period and
-thens runs a calibration and saves the file.
 }
 \examples{
-1 + 1
 1 + 1
 }
 
