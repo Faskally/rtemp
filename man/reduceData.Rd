@@ -7,13 +7,13 @@
 reduceData(dat, basisdim = 47, redbasisdim = 12, nharm = 4)
 }
 \arguments{
-\item{dat}{The number of simulations to use to evaluate confidence intervals.}
+\item{dat}{The data.}
 
-\item{basisdim}{The number of simulations to use to evaluate confidence intervals.}
+\item{basisdim}{original basis space for data.}
 
-\item{redbasisdim}{The number of simulations to use to evaluate confidence intervals.}
+\item{redbasisdim}{reduced basis space for consistency.}
 
-\item{nharm}{The number of simulations to use to evaluate confidence intervals.}
+\item{nharm}{fully reduced space for modelling.}
 }
 \description{
 This function does everything from read in files, select calibtation period and

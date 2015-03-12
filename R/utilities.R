@@ -61,50 +61,51 @@ cleanData <- function(object) {
 #' This function does everything from read in files, select calibtation period and
 #' thens runs a calibration and saves the file.
 #'
-#' @param dat The number of simulations to use to evaluate confidence intervals.
-#' @param basisdim The number of simulations to use to evaluate confidence intervals.
-#' @param redbasisdim The number of simulations to use to evaluate confidence intervals.
-#' @param nharm The number of simulations to use to evaluate confidence intervals.
+#' @param object The data.
+#' @param basisdim original basis space for data.
+#' @param redbasisdim reduced basis space for consistency.
+#' @param nharm fully reduced space for modelling.
 #' @return NULL
 #' @export
 #' @examples
 #' 1 + 1
-reduceData <- function(dat, basisdim = 47, redbasisdim = 12, nharm = 4) {
+reduceData <- function(object, basisdim = 47, redbasisdim = 12, nharm = 4) {
 
   # set up a fourier basis of dimension 48 and order 6 
   hourbasis <- create.fourier.basis(c(0, 24), basisdim, 24)
   # and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
   penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24)) 
 
+  # start timer / loader
+  loader(0)
 
   # calculate the smoothing to use for each day
-  dayyr <- unique(dat[c("yday", "year", "site")])
-  n <- with(dat, table(yday, year, site))
+  dayyr <- unique(object[c("yday", "year", "site")])
+  n <- with(object, table(yday, year, site))
   dayyr $ n <- n[n>0]
-  rownames(dayyr) <- NULL
-
+  rownames(dayyr) <- NULL  
   ns <- sort(unique(dayyr $ n))
-  lambda <- 
-    sapply(ns, 
-           function(n) df2lambda(seq(0.1, 23.9, length = n), 
-                                 hourbasis, Lfdobj=penalty, 
-                                 df=redbasisdim))
+  lambda <- sapply(ns, function(n) df2lambda(seq(0.1, 23.9, length = n), 
+                                             hourbasis, 
+                                             Lfdobj = penalty, 
+                                             df = redbasisdim))
   names(lambda) <- ns
   dayyr $ lambda <- lambda[paste(dayyr $ n)]
 
-
   # now calculate coefficients for each day
-
-  ck <- mapply(
-          function(yday, year, site, lambda) {
-            sdat <- dat[dat $ yday == yday & dat $ year == year & dat $ site == site,]
-            fd <- fdPar(hourbasis, penalty, lambda)
-            coef(smooth.basis(sdat $ dhour, sdat $ temp, fd))
-          }, 
-          yday   = dayyr $ yday, 
-          year   = dayyr $ year,
-          site   = dayyr $ site,
-          lambda = dayyr $ lambda) 
+  ck <- sapply(1:nrow(dayyr),
+          function(i) { 
+            if (i %% 10^(floor(log10(nrow(dayyr))) - 1) == 0) {
+              prog <- i/nrow(dayyr)
+              loader(prog)
+            }
+            sobject <- object[object $ yday == dayyr $ yday[i] & 
+                       object $ year == dayyr $ year[i] & 
+                       object $ site == dayyr $ site[i],]
+            fd <- fdPar(hourbasis, penalty, dayyr $ lambda[i])
+            coef(smooth.basis(sobject $ dhour, sobject $ temp, fd))
+          })
+  if (nrow(dayyr) %% 10^(floor(log10(nrow(dayyr))) - 1) != 0) loader(1)
 
   # convert these to new basis functions
   tempfd <- fd(ck, hourbasis)
@@ -115,7 +116,6 @@ reduceData <- function(dat, basisdim = 47, redbasisdim = 12, nharm = 4) {
   # save reduced data
   dayyr[paste0("PC", 1:nharm)] <- as.data.frame(pc $ scores)
 
-
   dayyr $ day <- with(dayyr, yday + (year - years[1]) * 365)
   dayyr $ month <- month.abb[strptime(paste(dayyr $ yday + 1, dayyr $ year), format = "%j %Y") $ mon + 1]
   dayyr $ season <- with(dayyr, ifelse(month %in% c("Nov", "Dec", "Jan", "Feb"), "Winter", 
@@ -125,8 +125,8 @@ reduceData <- function(dat, basisdim = 47, redbasisdim = 12, nharm = 4) {
   dayyr <- dayyr[order(dayyr $ day),]  
 
   # done!
-
-  list(dayyr, pc = pc)
+  attr(dayyr, "pc") <- pc
+  dayyr
 }
 
 
