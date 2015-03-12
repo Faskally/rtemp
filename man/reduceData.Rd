@@ -5,17 +5,31 @@
 \title{Run a full calibration}
 \usage{
 reduceData(object, pc)
+
+reduceData(object, pc)
 }
 \arguments{
 \item{object}{The number of simulations to use to evaluate confidence intervals.}
 
 \item{pc}{A number.}
+
+\item{dat}{The number of simulations to use to evaluate confidence intervals.}
+
+\item{basisdim}{The number of simulations to use to evaluate confidence intervals.}
+
+\item{redbasisdim}{The number of simulations to use to evaluate confidence intervals.}
+
+\item{nharm}{The number of simulations to use to evaluate confidence intervals.}
 }
 \description{
 This function does everything from read in files, select calibtation period and
 thens runs a calibration and saves the file.
+
+This function does everything from read in files, select calibtation period and
+thens runs a calibration and saves the file.
 }
 \examples{
+1 + 1
 1 + 1
 }
 

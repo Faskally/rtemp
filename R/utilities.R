@@ -16,18 +16,101 @@ NULL
 #' @examples
 #' 1 + 1
 cleanData <- function(object) {
+
+  # remove last day of leap year
+  object <- subset(object, yday < 365) 
+
+  # remove any days where there is not an obervation once an hour
   fullday <- 
     with(object, 
-      tapply(dhour, paste(yday, year, sep = ":"), 
-        function(x) all(unique(floor(x)) %in% 0:23)))
+      tapply(dhour, paste(yday, year, site, sep = ":"), 
+        function(x) all(0:23 %in% unique(floor(x)))))
+
   if (any(!fullday)) {
     nonfulldays <- do.call(rbind, strsplit(names(which(!fullday)), ":"))
     mode(nonfulldays) <- "numeric"
-    bool <- which(rowSums(apply(nonfulldays, 1, function(x) object $ yday == x[1] & object $ year == x[2])) == 1)
-    object <- object[!bool,]
+    bool <- rowSums(apply(nonfulldays, 1, 
+                  function(x) object $ yday == x[1] & 
+                              object $ year == x[2] &
+                              object $ site == x[3])) == 0
+    object <- object[bool,]
   }
 
   object
+}
+
+
+#' Run a full calibration
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param dat The number of simulations to use to evaluate confidence intervals.
+#' @param basisdim The number of simulations to use to evaluate confidence intervals.
+#' @param redbasisdim The number of simulations to use to evaluate confidence intervals.
+#' @param nharm The number of simulations to use to evaluate confidence intervals.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+reduceData <- function(dat, basisdim = 47, redbasisdim = 12, nharm = 4) {
+
+  # set up a fourier basis of dimension 48 and order 6 
+  hourbasis <- create.fourier.basis(c(0, 24), basisdim, 24)
+  # and a harmonic accelerator penalty... penalises deviations from sinusiodal curves
+  penalty <- vec2Lfd(c(0, (2*pi/24)^2, 0), c(0, 24)) 
+
+
+  # calculate the smoothing to use for each day
+  dayyr <- unique(dat[c("yday", "year", "site")])
+  n <- with(dat, table(yday, year, site))
+  dayyr $ n <- n[n>0]
+  rownames(dayyr) <- NULL
+
+  ns <- sort(unique(dayyr $ n))
+  lambda <- 
+    sapply(ns, 
+           function(n) df2lambda(seq(0.1, 23.9, length = n), 
+                                 hourbasis, Lfdobj=penalty, 
+                                 df=redbasisdim))
+  names(lambda) <- ns
+  dayyr $ lambda <- lambda[paste(dayyr $ n)]
+
+
+  # now calculate coefficients for each day
+
+  ck <- mapply(
+          function(yday, year, site, lambda) {
+            sdat <- dat[dat $ yday == yday & dat $ year == year & dat $ site == site,]
+            fd <- fdPar(hourbasis, penalty, lambda)
+            coef(smooth.basis(sdat $ dhour, sdat $ temp, fd))
+          }, 
+          yday   = dayyr $ yday, 
+          year   = dayyr $ year,
+          site   = dayyr $ site,
+          lambda = dayyr $ lambda) 
+
+  # convert these to new basis functions
+  tempfd <- fd(ck, hourbasis)
+
+  # reduce dimension
+  pc <- pca.fd(tempfd, nharm = nharm)
+
+  # save reduced data
+  dayyr[paste0("PC", 1:nharm)] <- as.data.frame(pc $ scores)
+
+
+  dayyr $ day <- with(dayyr, yday + (year - years[1]) * 365)
+  dayyr $ month <- month.abb[strptime(paste(dayyr $ yday + 1, dayyr $ year), format = "%j %Y") $ mon + 1]
+  dayyr $ season <- with(dayyr, ifelse(month %in% c("Nov", "Dec", "Jan", "Feb"), "Winter", 
+                                     ifelse(month %in% c("Mar", "Apr"), "Spring",
+                                            ifelse(month %in% c("May", "Jun", "Jul", "Aug"), "Summer", "Autumn"))))
+  dayyr $ season <- factor(dayyr $ season, levels = c("Winter", "Spring", "Summer", "Autumn"))
+  dayyr <- dayyr[order(dayyr $ day),]  
+
+  # done!
+
+  list(dayyr, pc = pc)
 }
 
 
