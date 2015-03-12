@@ -9,7 +9,10 @@ Depends:
 Imports:
     fda (>= 2.4.4),
     lattice (>= 0.20-29),
-    reshape (>= 0.8.5)
+    reshape (>= 0.8.5),
+    MASS (>= 7.3-35),
+    mgcv (>= 1.8-3),
+    nlme (>= 3.1-118)
 License: file LICENSE
 LazyData: true
 
