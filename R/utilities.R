@@ -2,6 +2,9 @@
 #' @import fda
 NULL
 
+#' @import reshape
+NULL
+
 #' Run a full calibration
 #' 
 #' This function does everything from read in files, select calibtation period and
@@ -192,7 +195,7 @@ reduceData <- function(object, pc) {
 #' 1 + 1
 plotPCbyblock <- function(dat, PC = "PC1", ncuts = 4) {
 #PC <- "PC1"
-dat1 <- subset(dat, pc == PC)
+dat1 <- dat[dat $ pc == PC, ]
 if (ncuts == 1) {
   dat1 $ wk <- "1"
 } else {
