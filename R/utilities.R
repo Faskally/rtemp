@@ -3,6 +3,35 @@
 NULL
 
 
+
+
+#' Run a full calibration
+#' 
+#' This function does everything from read in files, select calibtation period and
+#' thens runs a calibration and saves the file.
+#'
+#' @param object The number of simulations to use to evaluate confidence intervals.
+#' @return NULL
+#' @export
+#' @examples
+#' 1 + 1
+cleanData <- function(object) {
+  fullday <- 
+    with(object, 
+      tapply(dhour, paste(yday, year, sep = ":"), 
+        function(x) all(unique(floor(x)) %in% 0:23)))
+  if (any(!fullday)) {
+    nonfulldays <- do.call(rbind, strsplit(names(which(!fullday)), ":"))
+    mode(nonfulldays) <- "numeric"
+    bool <- which(rowSums(apply(nonfulldays, 1, function(x) object $ yday == x[1] & object $ year == x[2])) == 1)
+    object <- object[!bool,]
+  }
+
+  object
+}
+
+
+
 #' Run a full calibration
 #' 
 #' This function does everything from read in files, select calibtation period and
